@@ -1,0 +1,6 @@
+data/*.csv
+models/*.joblib
+__pycache__/
+.venv/
+*.pyc
+lakehouse/
