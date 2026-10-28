@@ -69,5 +69,17 @@ services:
       bash -c "pip install --quiet numpy pandas kafka-python-ng &&
       python streaming/generator.py --servers kafka:19092 --rate 5 --limit 600"
 
+  scorer:
+    image: python:3.13-slim
+    container_name: scorer
+    working_dir: /work
+    volumes:
+      - ./:/work
+    depends_on:
+      - spark
+    command: >
+      bash -c "pip install --quiet scikit-learn==1.6.1 pandas numpy joblib 'deltalake[pyarrow]' &&
+      python -u streaming/score_stream.py"
+
 volumes:
   ivy-cache:
