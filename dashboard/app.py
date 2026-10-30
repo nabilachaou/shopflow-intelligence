@@ -40,7 +40,14 @@ def live_pipeline():
     with left:
         theme.section("Débit d'arrivée (commandes par minute)")
         if len(t):
-            st.area_chart(t.dt.floor("min").value_counts().sort_index().tail(30), color=CYAN)
+            per_min = t.dt.floor("min").value_counts().sort_index().iloc[:-1].tail(30)
+            df_line = per_min.rename("commandes").reset_index()
+            df_line.columns = ["minute", "commandes"]
+            st.altair_chart(
+                alt.Chart(df_line).mark_line(color=CYAN, strokeWidth=2.5, interpolate="monotone")
+                .encode(x=alt.X("minute:T", title=None, axis=alt.Axis(format="%H:%M", grid=False)),
+                        y=alt.Y("commandes:Q", title=None, scale=alt.Scale(zero=False)))
+                .properties(height=300), width="stretch")
     with right:
         theme.section("Latences (secondes)")
         rows = []

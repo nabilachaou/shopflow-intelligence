@@ -62,6 +62,7 @@ while True:
             out = new[["order_id", "purchase_ts", "customer_state",
                        "estimated_delivery_days", "avg_distance_km", "total_price",
                        "risk_score", "risk_flag", "scored_at"]]
+            out = out.reset_index(drop=True)
             write_deltalake(GOLD, out, mode="append")
             print(f"{len(out)} commandes scorées | à risque : {int(out.risk_flag.sum())}", flush=True)
     except Exception as e:
