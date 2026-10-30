@@ -93,5 +93,21 @@ services:
       bash -c "pip install --quiet streamlit pandas 'deltalake[pyarrow]' &&
       streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0"
 
+  airflow:
+    image: apache/airflow:2.10.2
+    container_name: airflow
+    profiles: ["orch"]
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./:/opt/shopflow
+    command: >
+      bash -c "pip install --quiet --default-timeout=300 --retries 10 'deltalake[pyarrow]' pandas &&
+      airflow standalone"
+
 volumes:
   ivy-cache:
