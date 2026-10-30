@@ -1,0 +1,215 @@
+import altair as alt
+import pandas as pd
+import streamlit as st
+from deltalake import DeltaTable
+
+st.set_page_config(page_title="ShopFlow Intelligence", layout="wide")
+L = "lakehouse/"
+
+def read(name):
+    try:
+        return DeltaTable(L + name).to_pandas()
+    except Exception:
+        return None
+
+def utc(series):
+    return pd.to_datetime(series, utc=True, errors="coerce")
+
+st.title("ShopFlow Intelligence")
+st.caption("Plateforme Lakehouse : historique Olist (Databricks) + flux de commandes fictives "
+           "(Kafka, Spark Structured Streaming, scoring). Le flux est simulé, sans vérité terrain.")
+
+tabs = st.tabs(["Pipeline en direct", "Risque en direct", "Qualité et fidélité",
+                "Modèle et dérive", "Impact métier", "Architecture et limites"])
+
+@st.fragment(run_every=10)
+def live_pipeline():
+    b = read("bronze_orders_raw")
+    s = read("silver_orders_features")
+    g = read("gold_order_scores")
+    if b is None:
+        st.info("Aucune donnée pour l'instant : lance le générateur.")
+        return
+    nb, ns, ng = len(b), (len(s) if s is not None else 0), (len(g) if g is not None else 0)
+    c = st.columns(5)
+    c[0].metric("Bronze (brut)", f"{nb:,}")
+    c[1].metric("Silver (17 variables)", f"{ns:,}")
+    c[2].metric("Gold (scorées)", f"{ng:,}")
+    c[3].metric("Silver / Bronze", f"{ns / nb * 100:.1f} %" if nb else "n/a")
+    c[4].metric("Gold / Silver", f"{ng / ns * 100:.1f} %" if ns else "n/a")
+    st.caption("Un pourcentage sous 100 % indique un traitement en cours, pas forcément une perte.")
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Débit d'arrivée (commandes par minute)")
+        t = utc(b["kafka_ts"]).dropna()
+        if len(t):
+            per_min = t.dt.floor("min").value_counts().sort_index().tail(30)
+            st.line_chart(per_min.rename("commandes/min"))
+            st.caption("Débit imposé par le générateur, pas la capacité maximale du pipeline.")
+    with right:
+        st.subheader("Latences mesurées (secondes)")
+        rows = []
+        if {"ingested_at", "kafka_ts"} <= set(b.columns):
+            d = (utc(b["ingested_at"]) - utc(b["kafka_ts"])).dt.total_seconds().clip(lower=0).dropna()
+            if len(d):
+                rows.append({"étape": "Kafka → Bronze", "médiane": d.median(), "p95": d.quantile(0.95)})
+        if g is not None and len(g):
+            d = (utc(g["scored_at"]) - utc(g["purchase_ts"])).dt.total_seconds().clip(lower=0).dropna()
+            if len(d):
+                rows.append({"étape": "Génération → score", "médiane": d.median(), "p95": d.quantile(0.95)})
+        if rows:
+            st.dataframe(pd.DataFrame(rows).round(1), hide_index=True)
+        st.caption("Inclut les déclenchements (Bronze 5 s, Silver 10 s, scorer 10 s). Mesure de démonstration.")
+
+@st.fragment(run_every=10)
+def live_risk():
+    g = read("gold_order_scores")
+    if g is None or not len(g):
+        st.info("Aucune commande scorée pour l'instant.")
+        return
+    window = st.slider("Dernières commandes analysées", 50, 2000, 500, step=50)
+    g = g.sort_values("scored_at", ascending=False)
+    r = g.head(window)
+    c = st.columns(4)
+    c[0].metric("Commandes scorées", f"{len(g):,}")
+    c[1].metric("À risque (total)", f"{int(g.risk_flag.sum()):,}")
+    c[2].metric("Part à risque (fenêtre)", f"{r.risk_flag.mean() * 100:.1f} %")
+    c[3].metric("Score moyen (fenêtre)", f"{r.risk_score.mean():.3f}")
+    st.caption("Score de risque relatif, pas une probabilité calibrée. Seuil = 80e centile des 600 premières commandes.")
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Part à risque par État")
+        by = (r.groupby("customer_state").agg(n=("order_id", "count"), part=("risk_flag", "mean"))
+              .query("n >= 5").sort_values("part", ascending=False))
+        st.bar_chart(by["part"])
+    with right:
+        st.subheader("Risque selon le délai estimé")
+        bins = pd.cut(r["estimated_delivery_days"], [0, 12, 18, 24, 30, 40, 200])
+        st.bar_chart(r.groupby(bins, observed=True)["risk_score"].mean()
+                     .rename(lambda i: f"{int(i.left)}-{int(i.right)} j"))
+    st.subheader("Commandes à risque les plus récentes")
+    st.dataframe(r[r.risk_flag == 1][["order_id", "customer_state", "estimated_delivery_days",
+                                      "avg_distance_km", "total_price", "risk_score"]].head(15),
+                 hide_index=True)
+
+OLIST_TRAIN = {"estimated_delivery_days": 25.2, "avg_distance_km": 612.8, "total_price": 136.1}
+
+@st.fragment(run_every=15)
+def live_quality():
+    b = read("bronze_orders_raw")
+    s = read("silver_orders_features")
+    g = read("gold_order_scores")
+    if s is None or not len(s):
+        st.info("Silver n'existe pas encore.")
+        return
+    st.subheader("Contrôles d'intégrité")
+    rows = []
+    for name, df in [("Bronze", b), ("Silver", s), ("Gold", g)]:
+        if df is not None:
+            rows.append({"couche": name, "lignes": len(df),
+                         "doublons order_id": len(df) - df["order_id"].nunique()})
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Valeurs manquantes dans Silver (%)")
+        nulls = (s.isna().mean() * 100).round(2)
+        nulls = nulls[nulls > 0]
+        if len(nulls):
+            st.dataframe(nulls.rename("% nul"))
+        else:
+            st.success("Aucune valeur manquante.")
+        st.caption(f"distance_missing = {s['distance_missing'].mean() * 100:.2f} % (0,49 % sur Olist).")
+    with right:
+        st.subheader("Fidélité du générateur à Olist")
+        rows = []
+        for col, ref in OLIST_TRAIN.items():
+            live = float(s[col].mean())
+            rows.append({"variable": col, "générateur": round(live, 1),
+                         "Olist (train)": ref, "écart %": round((live / ref - 1) * 100, 1)})
+        st.dataframe(pd.DataFrame(rows), hide_index=True)
+        st.caption("La formule du délai estimé du générateur est inventée : les scores sont décalés par rapport à Olist.")
+
+with tabs[0]:
+    live_pipeline()
+with tabs[1]:
+    live_risk()
+with tabs[2]:
+    live_quality()
+
+with tabs[3]:
+    st.subheader("Résultats sur le test Olist (juin à août 2018, jamais vu à l'entraînement)")
+    c = st.columns(4)
+    c[0].metric("PR-AUC", "0,220", "hasard : 0,055")
+    c[1].metric("ROC-AUC", "0,788")
+    c[2].metric("Top 10 % → retards captés", "38,8 %")
+    c[3].metric("Top 20 % → retards captés", "59,1 %")
+    st.caption("Régression logistique, 17 colonnes d'entrée. Test consulté deux fois (v1 et v2).")
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Comparaison des modèles (validation)")
+        st.dataframe(pd.DataFrame({
+            "modèle": ["Régression logistique", "Random Forest", "LightGBM"],
+            "PR-AUC": [0.1736, 0.1784, 0.1469],
+            "ROC-AUC": [0.7073, 0.7016, 0.6900]}), hide_index=True)
+        st.caption("Régression logistique et Random Forest sont équivalents (écart dans le bruit).")
+    with right:
+        st.subheader("Ablation : poids du délai estimé (validation)")
+        abl = pd.DataFrame({
+            "variante": ["Toutes", "Sans purchase_month", "Sans délai estimé", "Sans les deux"],
+            "PR-AUC": [0.1736, 0.1741, 0.1155, 0.1160]})
+        st.bar_chart(abl.set_index("variante"))
+        st.caption("Le délai estimé est la variable dominante.")
+    st.subheader("Dérive de concept : taux de retard selon le délai estimé")
+    drift = pd.DataFrame({
+        "tranche de délai": ["0-12", "12-18", "18-24", "24-30", "30-40", "40+"],
+        "train": [7.1, 7.4, 10.4, 9.2, 7.6, 3.5],
+        "validation": [7.2, 11.7, 11.6, 6.0, 3.2, 0.7],
+        "test": [16.5, 3.7, 3.3, 1.8, 0.9, 0.6]})
+    long = drift.melt("tranche de délai", var_name="jeu", value_name="taux de retard (%)")
+    st.altair_chart(alt.Chart(long).mark_line(point=True).encode(
+        x=alt.X("tranche de délai:N", sort=list(drift["tranche de délai"])),
+        y="taux de retard (%):Q", color="jeu:N"))
+    st.warning("À tranche de délai égale, le taux de retard du test est nettement plus bas que celui du "
+               "train : la relation a changé. Probabilités non calibrées entre périodes (0,147 prédit "
+               "contre 0,055 réel) : score relatif avec seuil en rang.")
+    st.code("workspace.default.shopflow_late_risk | version 1 | alias champion | scikit-learn 1.6.1")
+
+with tabs[4]:
+    st.subheader("Le retard et la satisfaction client (Olist, 96 470 commandes livrées)")
+    c = st.columns(4)
+    c[0].metric("Note moyenne à l'heure", "4,29")
+    c[1].metric("Note moyenne en retard", "2,57")
+    c[2].metric("Notes 1-2 à l'heure", "9,2 %")
+    c[3].metric("Notes 1-2 en retard", "54,0 %")
+    st.caption("Corrélation observée, pas une preuve de causalité.")
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Commentaires mentionnant un retard (mots-clés stricts)")
+        st.bar_chart(pd.DataFrame({"% des commentaires": [2.6, 19.8]},
+                                  index=["À l'heure", "En retard"]))
+        st.caption("Sur 39 094 avis commentés (~40 % des commandes). Le mot « prazo » est écarté.")
+    with right:
+        st.subheader("Ciblage")
+        st.write("Surveiller 20 % des commandes les mieux classées permet de repérer **59 %** des "
+                 "retards, contre 20 % au hasard (lift x2,95 sur le test).")
+        st.caption("Les avis ne sont jamais des variables du modèle (fuite de données).")
+
+with tabs[5]:
+    st.subheader("Architecture")
+    st.graphviz_chart("""
+    digraph G { rankdir=LR; node [shape=box, style=rounded];
+      Olist [label="CSV Olist"]; DBX [label="Databricks\\nBronze/Silver/Gold"];
+      ML [label="Entraînement\\n+ MLflow"]; GEN [label="Générateur"];
+      K [label="Kafka\\norders_raw"]; B [label="Spark\\nBronze"]; S [label="Spark\\nSilver"];
+      SC [label="Scorer\\nmodel_v2"]; G [label="Gold\\norder_scores"]; D [label="Dashboard"];
+      Olist -> DBX -> ML; ML -> SC [label="modèle exporté", style=dashed];
+      GEN -> K -> B -> S -> SC -> G -> D; }
+    """)
+    st.subheader("Limites assumées")
+    st.markdown("""
+- Le flux est **simulé** : commandes fictives, sans vérité terrain.
+- Le délai estimé du générateur suit une formule inventée.
+- Le test Olist a été consulté deux fois ; score relatif uniquement.
+- Aucun débit maximal n'a été mesuré.
+- Databricks Free ne peut pas joindre le Kafka local : le lien passe par des fichiers exportés.
+""")

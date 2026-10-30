@@ -66,8 +66,8 @@ services:
         condition: service_completed_successfully
     profiles: ["gen"]
     command: >
-      bash -c "pip install --quiet numpy pandas kafka-python-ng &&
-      python streaming/generator.py --servers kafka:19092 --rate 5 --limit 600"
+      bash -c "pip install --quiet numpy pandas orjson kafka-python-ng &&
+      python streaming/generator.py --servers kafka:19092 --rate 1.67 --batch 1 --limit 0"
 
   scorer:
     image: python:3.13-slim
@@ -80,6 +80,18 @@ services:
     command: >
       bash -c "pip install --quiet scikit-learn==1.6.1 pandas numpy joblib 'deltalake[pyarrow]' &&
       python -u streaming/score_stream.py"
+
+  dashboard:
+    image: python:3.13-slim
+    container_name: dashboard
+    working_dir: /work
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/work
+    command: >
+      bash -c "pip install --quiet streamlit pandas 'deltalake[pyarrow]' &&
+      streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0"
 
 volumes:
   ivy-cache:
