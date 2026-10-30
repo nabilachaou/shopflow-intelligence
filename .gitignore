@@ -6,3 +6,4 @@ __pycache__/
 lakehouse/
 models/threshold.json
 airflow/logs/
+airflow/logs/
