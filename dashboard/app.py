@@ -29,6 +29,8 @@ def live_pipeline():
         st.info("En attente du flux de commandes.")
         return
     nb, ns, ng = len(b), len(s) if s is not None else 0, len(g) if g is not None else 0
+    ns = min(ns, nb)
+    ng = min(ng, ns)
     c = st.columns(4)
     theme.kpi(c[0], "Bronze", f"{nb:,}", BLUE)
     theme.kpi(c[1], "Silver", f"{ns:,}", CYAN)
@@ -43,11 +45,13 @@ def live_pipeline():
             per_min = t.dt.floor("min").value_counts().sort_index().iloc[:-1].tail(30)
             df_line = per_min.rename("commandes").reset_index()
             df_line.columns = ["minute", "commandes"]
-            st.altair_chart(
-                alt.Chart(df_line).mark_line(color=CYAN, strokeWidth=2.5, interpolate="monotone")
-                .encode(x=alt.X("minute:T", title=None, axis=alt.Axis(format="%H:%M", grid=False)),
-                        y=alt.Y("commandes:Q", title=None, scale=alt.Scale(zero=False)))
-                .properties(height=300), width="stretch")
+            line = (alt.Chart(df_line).mark_line(color=CYAN, strokeWidth=2.5, interpolate="monotone")
+                    .encode(x=alt.X("minute:T", title=None, axis=alt.Axis(format="%H:%M", grid=False)),
+                            y=alt.Y("commandes:Q", title=None,
+                                    scale=alt.Scale(domain=[0, 150]))))
+            ref = (alt.Chart(pd.DataFrame({"y": [100]})).mark_rule(color="#475569", strokeDash=[5, 5])
+                   .encode(y="y:Q"))
+            st.altair_chart((line + ref).properties(height=300), width="stretch")
     with right:
         theme.section("Latences (secondes)")
         rows = []
@@ -88,7 +92,13 @@ def live_risk():
     theme.section("Commandes à risque récentes")
     st.dataframe(r[r.risk_flag == 1][["order_id", "customer_state", "estimated_delivery_days",
                                       "avg_distance_km", "total_price", "risk_score"]].head(12),
-                 hide_index=True, width="stretch")
+                 hide_index=True, width="stretch",
+                 column_config={
+                     "risk_score": st.column_config.ProgressColumn("Score", min_value=0, max_value=0.5, format="%.3f"),
+                     "order_id": "Commande", "customer_state": "État",
+                     "estimated_delivery_days": "Délai estimé (j)",
+                     "avg_distance_km": st.column_config.NumberColumn("Distance (km)", format="%.0f"),
+                     "total_price": st.column_config.NumberColumn("Prix", format="%.2f")})
 
 OLIST = {"estimated_delivery_days": 25.2, "avg_distance_km": 612.8, "total_price": 136.1}
 
