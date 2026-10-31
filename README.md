@@ -70,7 +70,7 @@ Un générateur produit des commandes brutes (produits, vendeurs et zips réels 
 ### Étape 8 : Orchestration et visualisation
 Airflow exécute `data_quality` (doublons, retard de Gold sur Bronze, toutes les 15 minutes) et `gold_kpis` (KPI par État). Le dashboard suit le pipeline en direct, le risque, la qualité des données et les résultats du modèle.
 
-![Airflow](docs/img/airflow.png)
+
 
 ## Lancer le projet
 
