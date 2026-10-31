@@ -94,7 +94,7 @@ services:
       streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0"
 
   airflow:
-    image: apache/airflow:2.10.2
+    build: ./airflow
     container_name: airflow
     profiles: ["orch"]
     ports:
@@ -106,8 +106,7 @@ services:
       - ./airflow/logs:/opt/airflow/logs
       - ./:/opt/shopflow
     command: >
-      bash -c "pip install --quiet --default-timeout=300 --retries 10 'deltalake[pyarrow]' pandas &&
-      airflow standalone"
+      airflow standalone
 
 volumes:
   ivy-cache:
