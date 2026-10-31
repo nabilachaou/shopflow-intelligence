@@ -3,7 +3,6 @@
 **Plateforme Data + IA de bout en bout pour anticiper les retards de livraison e-commerce.**
 Lakehouse Medallion (Databricks, Delta Lake) · Modèle suivi avec MLflow · Flux temps réel Kafka → Spark Structured Streaming · Orchestration Airflow · Dashboard Streamlit · Déploiement Docker Compose
 
-![Dashboard](docs/img/dashboard_pipeline.png)
 
 ## En bref
 
